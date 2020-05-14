@@ -3,502 +3,520 @@ unit AthleticMan;
 interface
 
 uses
-  Vcl.ExtCtrls, Vcl.Graphics, System.Classes, Vcl.Controls, Vcl.Forms;
+  Vcl.ExtCtrls, Vcl.Graphics, System.Classes, System.Types, Vcl.Controls, Vcl.Forms;
 
 const
-  NumberOfStates = 35; // Количество состояний
+  INTERVAL = 50;
 
 type
-  TJumpingMan = class
-    State: Integer;
-    Scale: Real;
-  private
-    Owner: TForm;
-    X, Y: Integer;
-    Timer: TTimer;
-    Canvas: TCanvas;
-    procedure DrawLine(const X1, Y1, X2, Y2: Integer);
-    procedure DrawCircle(const Rad, X, Y: Integer);
-    function GetX(const X: Integer): Integer;
-    function GetY(const Y: Integer): Integer;
-    procedure TimerOnTimer(Sender: TObject);
-  public
-    constructor Create(const AOwner: TForm);
-    procedure Draw(const X, Y: Integer);
-    procedure StartAnimation;
-    procedure PauseAnimation;
-    procedure StopAnimation;
+  TPartsOfMan = (
+    ptShoulderLeft, ptShoulderRight,
+    ptArmLeft, ptArmRight,
+    ptLegLeft, ptLegRight,
+    ptHipLeft, pthipright,
+    ptBody, ptNeck, ptHead, ptFull);
+
+  TState = record
+    Angle: Real;
+    Size:  Real;
+    DelayNum, Num: Integer;
+    DeltaAngle: Real;
+    DeltaSize: Integer;
   end;
+
+  TNodeP = ^TNode;
+  TNode = record
+    Data: TState;
+    Next: TNodeP;
+  end;
+
+  TList = class
+  private
+    FHead, FTail: TNodeP;
+    FSize: Integer;
+    function GetFront: TState;
+    function GetBack: TState;
+  public
+    constructor Create;
+    destructor Destroy;
+    function Empty: Boolean;
+    procedure PopFront;
+    procedure PushBack(const Node: TState);
+    property Front: TState read GetFront;
+    property Back: TState read GetBack;
+  end;
+
+  TPart = record
+    Angle: Real;
+    Size: Real;
+    DelayNum, Num: Integer;
+    DeltaAngle: Real;
+    DeltaSize: Integer;
+    Queue: TList;
+    constructor Create(const AAngle: Real; const ASize: Real);
+    procedure UpdateValue;
+  end;
+
+  TPartP = ^TPart;
+
+  TJumpingMan = class(TComponent)
+  private
+    FOwner: TForm;                                  // Форма, на которой располагается
+    FCanvas: TCanvas;
+    FLeft, FTop: Integer;                           // Позиция соединения шеи с плечами
+
+    FScale: Real;                                   // Масштаб
+    FTimer: TTimer;
+
+    FShoulderLeft, FShoulderRight: TPart;           // Плечи
+    FArmLeft, FArmRight: TPart;                     // Предплечья
+    FLegLeft, FLegRight: TPart;                     // Голень
+    FHipLeft, FHipRight: TPart;                     // Бедра
+    FBody: TPart;                                   // Тело
+    FNeck: TPart;                                   // Шея
+    FHead: TPart;                                   // Голова
+    FFull: TPart;
+
+    function GetPoint(const Start: TPoint; const APart: TPart): TPoint;
+    procedure DrawLine(const AStart, AFinish: TPoint);
+    procedure DrawCircle(const ACenter: TPoint; ASize: Integer);
+    procedure ReDraw;
+    procedure tmrUpdate(Sender: TObject);
+    function DeterminePart(APart: TPartsOfMan): TPartP;
+    function GetLastState(const APart: TPart): TState;
+  public
+    constructor Create(AOwner: TForm);
+    destructor Destroy;
+
+    procedure SetPosition(const X, Y: Integer);
+
+    procedure Draw;
+    procedure MovePartByAngle(APart: TPartsOfMan; AAngle: Real; ADelay: Integer = 0; ATime: Integer = INTERVAL);
+    procedure MovePartBySize(APart: TPartsOfMan; ASize: Real; ADelay: Integer = 0; ATime: Integer = INTERVAL);
+    procedure MovePart(APart: TPartsOfMan; AAngle: Real; ASize: Real; ADelay: Integer = 0; ATime: Integer = INTERVAL);
+    procedure Jump;
+    procedure Greeting;
+    procedure RunUp;
+
+    procedure UpdateValues;
+
+    property Left: Integer read FLeft;
+    property Top: Integer read FTop;
+    property Scale: Real read FScale write FScale;
+
+  end;
+
+function Rad(const AAngle: Integer): Real;
 
 implementation
 
-procedure TJumpingMan.DrawLine(const X1, Y1, X2, Y2: Integer);
+uses
+   MainWindow;
+
+function Rad(const AAngle: Integer): Real;
 begin
-  Self.Canvas.MoveTo(X1, Y1);
-  Self.Canvas.LineTo(X2, Y2);
+  Result := AAngle / 180 * Pi;
 end;
 
-function TJumpingMan.GetX(const X: Integer): Integer;
+{ TJumpingMan }
+
+function TJumpingMan.GetLastState(const APart: TPart): TState;
 begin
-  Result := Self.X + Trunc(X * Scale);
+  if APart.Queue.Empty then
+  begin
+    Result.Angle := APart.Angle;
+    Result.Size := APart.Size;
+    Result.DelayNum := APart.DelayNum;
+    Result.Num := APart.Num;
+    Result.DeltaAngle := Apart.DeltaAngle;
+    Result.DeltaSize := Apart.DeltaSize;
+  end
+  else Result := APart.Queue.Back;
 end;
 
-function TJumpingMan.GetY(const Y: Integer): Integer;
+function TJumpingMan.GetPoint(const Start: TPoint; const APart: TPart): TPoint;
 begin
-  Result := Self.Y + Trunc(Y * Scale);
+  Result.X := Round(Start.X + APart.Size * FScale * Cos(APart.Angle));
+  Result.Y := Round(Start.Y + APart.Size * FScale * -Sin(APart.Angle));
 end;
 
-procedure TJumpingMan.PauseAnimation;
+procedure TJumpingMan.tmrUpdate(Sender: TObject);
+var
+  Tmp: TJumpingMan;
 begin
-  Self.Timer.Enabled := False;
+  if not (Sender is TTimer) then Exit;
+  if not (TTimer(Sender).Owner is TJumpingMan) then Exit;
+  Tmp := TTimer(Sender).Owner as TJumpingMan;
+  Tmp.UpdateValues;
+  Tmp.ReDraw;
 end;
 
-procedure TJumpingMan.DrawCircle(const Rad, X, Y: Integer);
+procedure TJumpingMan.UpdateValues;
 begin
-  Self.Canvas.Ellipse(X - Rad, Y - Rad, X + Rad, Y + Rad);
+  FHead.UpdateValue;
+  FBody.UpdateValue;
+  FNeck.UpdateValue;
+  FShoulderLeft.UpdateValue;
+  FShoulderRight.UpdateValue;
+  FArmLeft.UpdateValue;
+  FArmRight.UpdateValue;
+  FHipLeft.UpdateValue;
+  FHipRight.UpdateValue;
+  FLegLeft.UpdateValue;
+  FLegRight.UpdateValue;
+  FFull.UpdateValue;
+  FLeft := Round(FFull.Angle);
+  FTOp := Round(FFull.Size);
 end;
 
-procedure TJumpingMan.TimerOnTimer(Sender: TObject);
+constructor TJumpingMan.Create(AOwner: TForm);
 begin
-  Inc(Self.State);
-  if Self.State >= NumberOfStates then
-    State := 0;
-  Self.Owner.Invalidate;
+  Inherited Create(AOwner);
+  FOwner := AOwner;
+  FCanvas := AOwner.Canvas;
+
+  FTimer := TTimer.Create(Self);
+  FTimer.Interval := INTERVAL;
+  FTimer.Enabled := True;
+  FTimer.OnTimer := tmrUpdate;
+
+  FScale := 1.0;
+
+  FBody.Create(Rad(270), 80);
+  FNeck.Create(Rad(90), 20);
+  FHead.Create(Rad(90), 30);
+  FShoulderLeft.Create(Rad(250), 50);
+  FShoulderRight.Create(Rad(290), 40);
+  FArmLeft.Create(Rad(270), 50);
+  FArmRight.Create(Rad(270), 45);
+  FHipLeft.Create(Rad(280), 60);
+  FHipRight.Create(Rad(310), 55);
+  FLegLeft.Create(Rad(260), 60);
+  FLegRight.Create(Rad(270), 55);
+  FFull.Queue := TList.Create;
 end;
 
-constructor TJumpingMan.Create(const AOwner: TForm);
+destructor TJumpingMan.Destroy;
 begin
-  Self.Owner := AOwner;
-  Self.Canvas := AOwner.Canvas;
-  Self.Scale := 1.0;
-  Self.State := 0;
-
-  Self.Timer := TTimer.Create(AOwner);
-  Self.Timer.Enabled := False;
-  Self.Timer.Interval := 200;
-  Self.Timer.OnTimer := TimerOnTimer;
+  FTimer.Free;
+  FBody.Queue.Free;
+  FNeck.Queue.Free;
+  FHead.Queue.Free;
+  FShoulderLeft.Queue.Free;
+  FShoulderRight.Queue.Free;
+  FArmLeft.Queue.Free;
+  FArmRight.Queue.Free;
+  FHipLeft.Queue.Free;
+  FHipRight.Queue.Free;
+  FLegLeft.Queue.Free;
+  FLegRight.Queue.Free;
+  FFull.Queue.Free;
+  Inherited;
 end;
 
-procedure TJumpingMan.Draw(const X, Y: Integer);
+function TJumpingMan.DeterminePart(APart: TPartsOfMan): TPartP;
 begin
-  Self.X := X;
-  Self.Y := Y;
-  case State of
-    0:
-      begin
-        DrawLine(GetX(60), GetY(150), GetX(60), GetY(230)); // Туловище
-        DrawLine(GetX(60), GetY(170), GetX(40), GetY(250)); // Рука Левая
-        DrawLine(GetX(60), GetY(170), GetX(80), GetY(230)); // Рука Правая
-        DrawLine(GetX(60), GetY(230), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(230), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(60), GetY(130)); // Голова
-      end;
-    1:
-      begin
-        DrawLine(GetX(60), GetY(150), GetX(60), GetY(230)); // Туловище
-        DrawLine(GetX(60), GetY(170), GetX(20), GetY(230)); // Рука Левая
-        DrawLine(GetX(60), GetY(170), GetX(100), GetY(210)); // Рука Правая
-        DrawLine(GetX(60), GetY(230), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(230), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(60), GetY(130)); // Голова
-      end;
-    2:
-      begin
-        DrawLine(GetX(60), GetY(150), GetX(60), GetY(230)); // Туловище
-        DrawLine(GetX(60), GetY(170), GetX(0), GetY(190)); // Рука Левая
-        DrawLine(GetX(60), GetY(170), GetX(120), GetY(170)); // Рука Правая
-        DrawLine(GetX(60), GetY(230), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(230), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(60), GetY(130)); // Голова
-      end;
-
-    3:
-      begin
-        DrawLine(GetX(60), GetY(150), GetX(60), GetY(230)); // Туловище
-        DrawLine(GetX(60), GetY(170), GetX(20), GetY(110)); // Рука Левая
-        DrawLine(GetX(60), GetY(170), GetX(100), GetY(80)); // Рука Правая
-        DrawLine(GetX(60), GetY(230), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(230), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(60), GetY(130)); // Голова
-      end;
-
-    4:
-      begin
-        DrawLine(GetX(60), GetY(150), GetX(60), GetY(230)); // Туловище
-        DrawLine(GetX(60), GetY(170), GetX(40), GetY(90)); // Рука Левая
-        DrawLine(GetX(60), GetY(170), GetX(80), GetY(60)); // Рука Правая
-        DrawLine(GetX(60), GetY(230), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(230), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(60), GetY(130)); // Голова
-      end;
-
-    5:
-      begin
-        DrawLine(GetX(60), GetY(150), GetX(60), GetY(230)); // Туловище
-        DrawLine(GetX(60), GetY(170), GetX(120), GetY(110)); // Рука Левая
-        DrawLine(GetX(60), GetY(170), GetX(100), GetY(80)); // Рука Правая
-        DrawLine(GetX(60), GetY(230), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(230), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(60), GetY(130)); // Голова
-      end;
-
-    6:
-      begin
-        DrawLine(GetX(60), GetY(150), GetX(60), GetY(230)); // Туловище
-        DrawLine(GetX(60), GetY(170), GetX(140), GetY(150)); // Рука Левая
-        DrawLine(GetX(60), GetY(170), GetX(120), GetY(120)); // Рука Правая
-        DrawLine(GetX(60), GetY(230), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(230), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(60), GetY(130)); // Голова
-      end;
-
-    7:
-      begin
-        DrawLine(GetX(70), GetY(160), GetX(50), GetY(240)); // Туловище
-        DrawLine(GetX(60), GetY(190), GetX(140), GetY(210)); // Рука Левая
-        DrawLine(GetX(60), GetY(190), GetX(120), GetY(180)); // Рука Правая
-        DrawLine(GetX(50), GetY(240), GetX(60), GetY(300));
-        DrawLine(GetX(60), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(50), GetY(240), GetX(80), GetY(290));
-        DrawLine(GetX(80), GetY(290), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(75), GetY(145)); // Голова
-      end;
-
-    8:
-      begin
-        DrawLine(GetX(90), GetY(170), GetX(40), GetY(250)); // Туловище
-        DrawLine(GetX(75), GetY(190), GetX(140), GetY(220)); // Рука Левая
-        DrawLine(GetX(75), GetY(190), GetX(120), GetY(200)); // Рука Правая
-        DrawLine(GetX(40), GetY(250), GetX(70), GetY(300));
-        DrawLine(GetX(70), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(40), GetY(250), GetX(90), GetY(280));
-        DrawLine(GetX(90), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(100), GetY(150)); // Голова
-      end;
-
-    9:
-      begin
-        DrawLine(GetX(90), GetY(180), GetX(40), GetY(260)); // Туловище
-        DrawLine(GetX(75), GetY(200), GetX(130), GetY(250)); // Рука Левая
-        DrawLine(GetX(75), GetY(200), GetX(110), GetY(230)); // Рука Правая
-        DrawLine(GetX(40), GetY(260), GetX(75), GetY(300));
-        DrawLine(GetX(75), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(40), GetY(260), GetX(95), GetY(280));
-        DrawLine(GetX(95), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(100), GetY(160)); // Голова
-      end;
-
-    10:
-      begin
-        DrawLine(GetX(90), GetY(190), GetX(40), GetY(270)); // Туловище
-        DrawLine(GetX(75), GetY(210), GetX(110), GetY(270)); // Рука Левая
-        DrawLine(GetX(75), GetY(210), GetX(90), GetY(250)); // Рука Правая
-        DrawLine(GetX(40), GetY(270), GetX(80), GetY(300));
-        DrawLine(GetX(80), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(40), GetY(270), GetX(100), GetY(280));
-        DrawLine(GetX(100), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(100), GetY(170)); // Голова
-      end;
-
-    11:
-      begin
-        DrawLine(GetX(90), GetY(190), GetX(40), GetY(270)); // Туловище
-        DrawLine(GetX(75), GetY(210), GetX(70), GetY(260)); // Рука Левая
-        DrawLine(GetX(75), GetY(210), GetX(65), GetY(240)); // Рука Правая
-        DrawLine(GetX(40), GetY(270), GetX(80), GetY(300));
-        DrawLine(GetX(80), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(40), GetY(270), GetX(100), GetY(280));
-        DrawLine(GetX(100), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(100), GetY(170)); // Голова
-      end;
-
-    12:
-      begin
-        DrawLine(GetX(90), GetY(190), GetX(40), GetY(270)); // Туловище
-        DrawLine(GetX(77), GetY(210), GetX(40), GetY(255)); // Рука Левая
-        DrawLine(GetX(77), GetY(210), GetX(60), GetY(240)); // Рука Правая
-        DrawLine(GetX(40), GetY(270), GetX(80), GetY(300));
-        DrawLine(GetX(80), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(40), GetY(270), GetX(100), GetY(280));
-        DrawLine(GetX(100), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(100), GetY(170)); // Голова
-      end;
-
-    13:
-      begin
-        DrawLine(GetX(100), GetY(185), GetX(50), GetY(265)); // Туловище
-        DrawLine(GetX(85), GetY(205), GetX(60), GetY(255)); // Рука Левая
-        DrawLine(GetX(85), GetY(205), GetX(70), GetY(240)); // Рука Правая
-        DrawLine(GetX(50), GetY(265), GetX(70), GetY(300));
-        DrawLine(GetX(70), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(50), GetY(265), GetX(90), GetY(280));
-        DrawLine(GetX(90), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(110), GetY(165)); // Голова
-      end;
-
-    14:
-      begin
-        DrawLine(GetX(110), GetY(180), GetX(60), GetY(260)); // Туловище
-        DrawLine(GetX(97), GetY(200), GetX(90), GetY(245)); // Рука Левая
-        DrawLine(GetX(97), GetY(200), GetX(85), GetY(230)); // Рука Правая
-        DrawLine(GetX(60), GetY(260), GetX(65), GetY(300));
-        DrawLine(GetX(65), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(60), GetY(260), GetX(85), GetY(280));
-        DrawLine(GetX(85), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(120), GetY(160)); // Голова
-      end;
-
-    15:
-      begin
-        DrawLine(GetX(125), GetY(170), GetX(75), GetY(250)); // Туловище
-        DrawLine(GetX(112), GetY(190), GetX(155), GetY(225)); // Рука Левая
-        DrawLine(GetX(112), GetY(190), GetX(145), GetY(215)); // Рука Правая
-        DrawLine(GetX(75), GetY(250), GetX(62), GetY(300));
-        DrawLine(GetX(62), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(75), GetY(250), GetX(82), GetY(280));
-        DrawLine(GetX(82), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(135), GetY(150)); // Голова
-      end;
-
-    16:
-      begin
-        DrawLine(GetX(140), GetY(160), GetX(90), GetY(240)); // Туловище
-        DrawLine(GetX(125), GetY(180), GetX(190), GetY(215)); // Рука Левая
-        DrawLine(GetX(125), GetY(180), GetX(170), GetY(205)); // Рука Правая
-        DrawLine(GetX(90), GetY(240), GetX(62), GetY(300));
-        DrawLine(GetX(62), GetY(300), GetX(40), GetY(350)); // Нога Левая
-        DrawLine(GetX(90), GetY(240), GetX(85), GetY(280));
-        DrawLine(GetX(85), GetY(280), GetX(80), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(150), GetY(140)); // Голова
-      end;
-
-    17:
-      begin
-        DrawLine(GetX(165), GetY(150), GetX(105), GetY(230)); // Туловище
-        DrawLine(GetX(151), GetY(170), GetX(210), GetY(205)); // Рука Левая
-        DrawLine(GetX(151), GetY(170), GetX(190), GetY(195)); // Рука Правая
-        DrawLine(GetX(105), GetY(230), GetX(80), GetY(290));
-        DrawLine(GetX(80), GetY(290), GetX(45), GetY(330)); // Нога Левая
-        DrawLine(GetX(105), GetY(230), GetX(115), GetY(260));
-        DrawLine(GetX(115), GetY(260), GetX(100), GetY(310)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(170), GetY(133)); // Голова
-      end;
-
-    18:
-      begin
-        DrawLine(GetX(185), GetY(145), GetX(125), GetY(225)); // Туловище
-        DrawLine(GetX(171), GetY(165), GetX(230), GetY(200)); // Рука Левая
-        DrawLine(GetX(171), GetY(165), GetX(220), GetY(190)); // Рука Правая
-        DrawLine(GetX(125), GetY(225), GetX(120), GetY(280));
-        DrawLine(GetX(120), GetY(280), GetX(95), GetY(320)); // Нога Левая
-        DrawLine(GetX(125), GetY(225), GetX(155), GetY(250));
-        DrawLine(GetX(155), GetY(250), GetX(150), GetY(300)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(190), GetY(130)); // Голова
-      end;
-
-    19:
-      begin
-        DrawLine(GetX(195), GetY(140), GetX(135), GetY(225)); // Туловище
-        DrawLine(GetX(175), GetY(165), GetX(235), GetY(200)); // Рука Левая
-        DrawLine(GetX(175), GetY(165), GetX(225), GetY(190)); // Рука Правая
-        DrawLine(GetX(135), GetY(225), GetX(150), GetY(275));
-        DrawLine(GetX(150), GetY(275), GetX(130), GetY(315)); // Нога Левая
-        DrawLine(GetX(135), GetY(225), GetX(185), GetY(245));
-        DrawLine(GetX(185), GetY(245), GetX(180), GetY(290)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(195), GetY(125)); // Голова
-      end;
-
-    20:
-      begin
-        DrawLine(GetX(205), GetY(140), GetX(145), GetY(225)); // Туловище
-        DrawLine(GetX(185), GetY(165), GetX(245), GetY(200)); // Рука Левая
-        DrawLine(GetX(185), GetY(165), GetX(235), GetY(190)); // Рука Правая
-        DrawLine(GetX(145), GetY(225), GetX(170), GetY(260));
-        DrawLine(GetX(170), GetY(260), GetX(165), GetY(300)); // Нога Левая
-        DrawLine(GetX(145), GetY(225), GetX(205), GetY(235));
-        DrawLine(GetX(205), GetY(235), GetX(210), GetY(280)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(205), GetY(125)); // Голова
-      end;
-
-    21:
-      begin
-        DrawLine(GetX(225), GetY(140), GetX(165), GetY(225)); // Туловище
-        DrawLine(GetX(207), GetY(165), GetX(265), GetY(200)); // Рука Левая
-        DrawLine(GetX(207), GetY(165), GetX(255), GetY(190)); // Рука Правая
-        DrawLine(GetX(165), GetY(225), GetX(195), GetY(258));
-        DrawLine(GetX(195), GetY(258), GetX(195), GetY(290)); // Нога Левая
-        DrawLine(GetX(165), GetY(225), GetX(225), GetY(230));
-        DrawLine(GetX(225), GetY(230), GetX(240), GetY(275)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(225), GetY(125)); // Голова
-      end;
-
-    22:
-      begin
-        DrawLine(GetX(245), GetY(140), GetX(185), GetY(225)); // Туловище
-        DrawLine(GetX(227), GetY(165), GetX(285), GetY(200)); // Рука Левая
-        DrawLine(GetX(227), GetY(165), GetX(275), GetY(190)); // Рука Правая
-        DrawLine(GetX(185), GetY(225), GetX(215), GetY(258));
-        DrawLine(GetX(215), GetY(258), GetX(225), GetY(290)); // Нога Левая
-        DrawLine(GetX(185), GetY(225), GetX(245), GetY(230));
-        DrawLine(GetX(245), GetY(230), GetX(270), GetY(275)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(245), GetY(125)); // Голова
-      end;
-
-    23:
-      begin
-        DrawLine(GetX(265), GetY(140), GetX(205), GetY(225)); // Туловище
-        DrawLine(GetX(247), GetY(165), GetX(305), GetY(200)); // Рука Левая
-        DrawLine(GetX(247), GetY(165), GetX(295), GetY(190)); // Рука Правая
-        DrawLine(GetX(205), GetY(225), GetX(235), GetY(258));
-        DrawLine(GetX(235), GetY(258), GetX(245), GetY(290)); // Нога Левая
-        DrawLine(GetX(205), GetY(225), GetX(265), GetY(230));
-        DrawLine(GetX(265), GetY(230), GetX(290), GetY(275)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(265), GetY(125)); // Голова
-      end;
-
-    24:
-      begin
-        DrawLine(GetX(285), GetY(140), GetX(225), GetY(225)); // Туловище
-        DrawLine(GetX(267), GetY(165), GetX(325), GetY(200)); // Рука Левая
-        DrawLine(GetX(267), GetY(165), GetX(315), GetY(190)); // Рука Правая
-        DrawLine(GetX(225), GetY(225), GetX(255), GetY(258));
-        DrawLine(GetX(255), GetY(258), GetX(275), GetY(290)); // Нога Левая
-        DrawLine(GetX(225), GetY(225), GetX(285), GetY(230));
-        DrawLine(GetX(285), GetY(230), GetX(320), GetY(275)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(285), GetY(125)); // Голова
-      end;
-
-    25:
-      begin
-        DrawLine(GetX(310), GetY(140), GetX(260), GetY(225)); // Туловище
-        DrawLine(GetX(297), GetY(165), GetX(355), GetY(200)); // Рука Левая
-        DrawLine(GetX(297), GetY(165), GetX(345), GetY(190)); // Рука Правая
-        DrawLine(GetX(260), GetY(225), GetX(295), GetY(245));
-        DrawLine(GetX(295), GetY(245), GetX(305), GetY(290)); // Нога Левая
-        DrawLine(GetX(260), GetY(225), GetX(315), GetY(230));
-        DrawLine(GetX(315), GetY(230), GetX(350), GetY(275)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(310), GetY(125)); // Голова
-      end;
-
-    26:
-      begin
-        DrawLine(GetX(325), GetY(155), GetX(275), GetY(240)); // Туловище
-        DrawLine(GetX(310), GetY(180), GetX(370), GetY(215)); // Рука Левая
-        DrawLine(GetX(310), GetY(180), GetX(360), GetY(205)); // Рука Правая
-        DrawLine(GetX(275), GetY(240), GetX(315), GetY(260));
-        DrawLine(GetX(315), GetY(260), GetX(325), GetY(305)); // Нога Левая
-        DrawLine(GetX(275), GetY(240), GetX(330), GetY(245));
-        DrawLine(GetX(330), GetY(245), GetX(365), GetY(290)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(325), GetY(140)); // Голова
-      end;
-
-    27:
-      begin
-        DrawLine(GetX(345), GetY(165), GetX(295), GetY(250)); // Туловище
-        DrawLine(GetX(330), GetY(190), GetX(390), GetY(225)); // Рука Левая
-        DrawLine(GetX(330), GetY(190), GetX(380), GetY(215)); // Рука Правая
-        DrawLine(GetX(295), GetY(250), GetX(330), GetY(275));
-        DrawLine(GetX(330), GetY(275), GetX(345), GetY(320)); // Нога Левая
-        DrawLine(GetX(295), GetY(250), GetX(345), GetY(260));
-        DrawLine(GetX(345), GetY(260), GetX(385), GetY(305)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(345), GetY(150)); // Голова
-      end;
-
-    28:
-      begin
-        DrawLine(GetX(365), GetY(180), GetX(330), GetY(265)); // Туловище
-        DrawLine(GetX(355), GetY(205), GetX(410), GetY(240)); // Рука Левая
-        DrawLine(GetX(355), GetY(205), GetX(400), GetY(230)); // Рука Правая
-        DrawLine(GetX(330), GetY(265), GetX(350), GetY(295));
-        DrawLine(GetX(350), GetY(295), GetX(360), GetY(340)); // Нога Левая
-        DrawLine(GetX(330), GetY(265), GetX(360), GetY(280));
-        DrawLine(GetX(360), GetY(280), GetX(400), GetY(325)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(365), GetY(165)); // Голова
-      end;
-
-    29:
-      begin
-        DrawLine(GetX(370), GetY(220), GetX(330), GetY(300)); // Туловище
-        DrawLine(GetX(362), GetY(235), GetX(420), GetY(270)); // Рука Левая
-        DrawLine(GetX(362), GetY(235), GetX(410), GetY(260)); // Рука Правая
-        DrawLine(GetX(330), GetY(300), GetX(370), GetY(315));
-        DrawLine(GetX(370), GetY(315), GetX(370), GetY(350)); // Нога Левая
-        DrawLine(GetX(330), GetY(300), GetX(380), GetY(300));
-        DrawLine(GetX(380), GetY(300), GetX(410), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(370), GetY(210)); // Голова
-      end;
-
-    30:
-      begin
-        DrawLine(GetX(370), GetY(210), GetX(330), GetY(310)); // Туловище
-        DrawLine(GetX(355), GetY(245), GetX(415), GetY(275)); // Рука Левая
-        DrawLine(GetX(355), GetY(245), GetX(405), GetY(265)); // Рука Правая
-        DrawLine(GetX(330), GetY(310), GetX(375), GetY(310));
-        DrawLine(GetX(375), GetY(310), GetX(370), GetY(350)); // Нога Левая
-        DrawLine(GetX(330), GetY(310), GetX(385), GetY(295));
-        DrawLine(GetX(385), GetY(295), GetX(410), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(370), GetY(220)); // Голова
-      end;
-
-    31:
-      begin
-        DrawLine(GetX(375), GetY(200), GetX(345), GetY(290)); // Туловище
-        DrawLine(GetX(365), GetY(235), GetX(415), GetY(280)); // Рука Левая
-        DrawLine(GetX(365), GetY(235), GetX(405), GetY(270)); // Рука Правая
-        DrawLine(GetX(345), GetY(290), GetX(375), GetY(315));
-        DrawLine(GetX(375), GetY(315), GetX(370), GetY(350)); // Нога Левая
-        DrawLine(GetX(345), GetY(290), GetX(385), GetY(300));
-        DrawLine(GetX(385), GetY(300), GetX(410), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(370), GetY(200)); // Голова
-      end;
-
-    32:
-      begin
-        DrawLine(GetX(380), GetY(180), GetX(363), GetY(270)); // Туловище
-        DrawLine(GetX(372), GetY(220), GetX(415), GetY(270)); // Рука Левая
-        DrawLine(GetX(372), GetY(220), GetX(405), GetY(250)); // Рука Правая
-        DrawLine(GetX(363), GetY(270), GetX(375), GetY(315));
-        DrawLine(GetX(375), GetY(315), GetX(370), GetY(350)); // Нога Левая
-        DrawLine(GetX(363), GetY(270), GetX(385), GetY(300));
-        DrawLine(GetX(385), GetY(300), GetX(410), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(385), GetY(180)); // Голова
-      end;
-
-    33:
-      begin
-        DrawLine(GetX(385), GetY(165), GetX(380), GetY(250)); // Туловище
-        DrawLine(GetX(384), GetY(180), GetX(410), GetY(260)); // Рука Левая
-        DrawLine(GetX(384), GetY(180), GetX(385), GetY(240)); // Рука Правая
-        DrawLine(GetX(380), GetY(250), GetX(375), GetY(315));
-        DrawLine(GetX(375), GetY(315), GetX(370), GetY(350)); // Нога Левая
-        DrawLine(GetX(380), GetY(250), GetX(395), GetY(295));
-        DrawLine(GetX(395), GetY(295), GetX(410), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(390), GetY(155)); // Голова
-      end;
-
-    34:
-      begin
-        DrawLine(GetX(390), GetY(150), GetX(390), GetY(230)); // Туловище
-        DrawLine(GetX(390), GetY(170), GetX(410), GetY(230)); // Рука Левая
-        DrawLine(GetX(390), GetY(170), GetX(370), GetY(250)); // Рука Правая
-        DrawLine(GetX(390), GetY(230), GetX(370), GetY(350)); // Нога Левая
-        DrawLine(GetX(390), GetY(230), GetX(410), GetY(330)); // Нога Правая
-        DrawCircle(Trunc(20 * Scale), GetX(390), GetY(130)); // Голова
-      end;
-
+  case APart of
+    ptShoulderLeft: Result := @FShoulderLeft;
+    ptShoulderRight: Result := @FShoulderRight;
+    ptArmLeft: Result := @FArmLeft;
+    ptArmRight: Result := @FArmRight;
+    ptLegLeft: Result := @FLegLeft;
+    ptLegRight: Result := @FLegRight;
+    ptHipLeft: Result := @FHipLeft;
+    pthipright: Result := @FHipRight;
+    ptBody: Result := @FBody;
+    ptNeck: Result := @FNeck;
+    ptHead: Result := @FHead;
+    ptFull: Result := @FFull;
   end;
 end;
 
-procedure TJumpingMan.StartAnimation;
+procedure TJumpingMan.Draw;
+var
+  Now, Next: TPoint;
 begin
-  Self.Timer.Enabled := True;
-  Self.Owner.Invalidate;
+  Now.Create(FLeft, FTop);
+
+  // Neck and Head
+  Next := GetPoint(Now, FNeck);
+  DrawLine(Now, Next);
+  DrawCircle(GetPoint(Next, FHead), Round(FHead.Size * FScale));
+
+  // Left Arm
+  Next := GetPoint(Now, FShoulderLeft);
+  DrawLine(Now, Next);
+  DrawLine(Next, GetPoint(Next, FArmLeft));
+
+  // Right Arm
+  Next := GetPoint(Now, FShoulderRight);
+  DrawLine(Now, Next);
+  DrawLine(Next, GetPoint(Next, FArmRight));
+
+  // Body
+  Next := GetPoint(Now, FBody);
+  DrawLine(Now, Next);
+
+  Now := Next;
+  // Left Leg
+  Next := GetPoint(Now, FHipLeft);
+  DrawLine(Now, Next);
+  DrawLine(Next, GetPoint(Next, FLegLeft));
+
+  // Right Leg
+  Next := GetPoint(Now, FHipRight);
+  DrawLine(Now, Next);
+  DrawLine(Next, GetPoint(Next, FLegRight));
 end;
 
-procedure TJumpingMan.StopAnimation;
+procedure TJumpingMan.DrawCircle(const ACenter: TPoint; ASize: Integer);
 begin
-  Self.State := 0;
-  Self.Timer.Enabled := False;
+  FCanvas.Ellipse(
+    ACenter.X - ASize, ACenter.Y - ASize,
+    ACenter.X + ASize, ACenter.Y + ASize);
+end;
+
+procedure TJumpingMan.DrawLine(const AStart, AFinish: TPoint);
+begin
+  FCanvas.MoveTo(AStart.X, AStart.Y);
+  FCanvas.LineTo(AFinish.X, AFinish.Y);
+end;
+
+procedure TJumpingMan.Greeting;
+begin
+  MovePart(ptArmLeft, Rad(70), 50, 0, 1000);
+  MovePart(ptShoulderLeft, Rad(180), 50, 0, 1000);
+  MovePartByAngle(ptArmLeft, Rad(110), 0, 400);
+  MovePartByAngle(ptArmLeft, Rad(70), 0, 400);
+  MovePartByAngle(ptArmLeft, Rad(110), 0, 400);
+  MovePart(ptShoulderLeft, Rad(250), 50, 1000, 1000);
+  MovePart(ptArmLeft, Rad(270), 50, 0, 1000);
+end;
+
+procedure TJumpingMan.RunUp;
+begin
+  MovePart(ptArmLeft, Rad(180), 35, 400, 600);
+  MovePart(ptArmRight, Rad(360), 35, 3500, 600);
+  MovePart(ptShoulderLeft, Rad(180), 30, 400, 500);
+  MovePart(ptShoulderRight, Rad(360), 30, 3500, 500);
+  MovePart(ptArmLeft, Rad(135), 45, 50, 500);
+  MovePart(ptArmRight, Rad(405), 50, 50, 500);
+  MovePart(ptShoulderLeft, Rad(135), 40, 50, 400);
+  MovePart(ptShoulderRight, Rad(405), 50, 50, 400);
+  MovePartByAngle(ptHead, Rad(45), 4100, 1700);
+  MovePartByAngle(ptBody, Rad(240), 4100, 1700);
+  MovePartByAngle(ptNeck, Rad(60), 4100, 1700);
+  MovePartByAngle(ptHipLeft, Rad(300), 4400, 1700);
+  MovePartByAngle(ptHipRight, Rad(330), 4400, 1700);
+  MovePartByAngle(ptLegleft, Rad(240), 4400, 1700);
+  MovePartByAngle(ptLegright, Rad(250), 4400, 1700);
+  MovePart(ptShoulderLeft, Rad(-140), 50, 500, 1200);
+  MovePart(ptShoulderRight, Rad(215), 40, 450, 1200);
+  MovePart(ptArmLeft, Rad(-140), 50, 500, 800);
+  MovePart(ptArmRight, Rad(215), 45, 450, 900);
+  MovePart(ptFull, 300, 500, 4100, 1700);
+end;
+
+procedure TJumpingMan.Jump;
+begin
+  MovePartByAngle(ptHipLeft, Rad(270), 60, 1000);
+  MovePartByAngle(ptHipRight, Rad(290), 60, 1000);
+  MovePartByAngle(ptLegLeft, Rad(260), 60, 1000);
+  MovePartByAngle(ptLegRight, Rad(270), 60, 1000);
+  MovePart(ptShoulderLeft, Rad(-15), 40, 80, 1000);
+  MovePart(ptShoulderRight, Rad(360), 50, 80, 800);
+  MovePart(ptArmLeft, Rad(-15), 45, 70, 1000);
+  MovePart(ptArmRight, Rad(360), 50, 70, 800);
+  MovePart(ptFull, 320, 480, 0, 1000);
+  MovePart(ptFull, 520, 230, 0, 1800);
+  MovePartByAngle(ptHipLeft, Rad(330), 60, 1800);
+  MovePartByAngle(ptHipRight, Rad(350), 60, 1800);
+  MovePart(ptFull, 600, 180, 0, 600);
+  MovePart(ptFull, 680, 230, 0, 600);
+  MovePart(ptFull, 880, 400, 0, 1800);
+  MovePartByAngle(ptHipLeft, Rad(290), 610, 2000);
+  MovePartByAngle(ptHipRight, Rad(310), 610, 2000);
+  MovePartByAngle(ptLegLeft, Rad(290), 710, 1900);
+  MovePartByAngle(ptLegRight, Rad(300), 710, 1900);
+  MovePartByAngle(ptBody, Rad(260), 3600, 1800);
+  MovePartByAngle(ptNeck, Rad(80), 3600, 1800);
+  MovePartByAngle(ptHipLeft, Rad(350), 1100, 700);
+  MovePartByAngle(ptHipRight, Rad(370), 1100, 700);
+  MovePartByAngle(ptLegLeft, Rad(240), 1300, 700);
+  MovePartByAngle(ptLegRight, Rad(250), 1300, 700);
+  MovePartByAngle(ptBody, Rad(220), 300, 1200);
+  MovePartByAngle(ptNeck, Rad(40), 300, 1200);
+  MovePart(ptFull, 830, 600, 200, 1500);
+  MovePart(ptFull, 840, 430, 0, 1500);
+  MovePartByAngle(ptBody, Rad(270), 50, 1900);
+  MovePartByAngle(ptNeck, Rad(90), 50, 1900);
+  MovePart(ptShoulderLeft, Rad(-70), 50, 6000, 1600);
+  MovePart(ptShoulderRight, Rad(260), 40, 6000, 1600);
+  MovePart(ptArmLeft, Rad(-90), 50, 6000, 2000);
+  MovePart(ptArmRight, Rad(270), 45, 6000, 2000);
+  MovePartByAngle(ptHipLeft, Rad(280), 50, 1300);
+  MovePartByAngle(ptHipRight, Rad(310), 50, 1300);
+  MovePartByAngle(ptLegLeft, Rad(260), 50, 1300);
+  MovePartByAngle(ptLegRight, Rad(270), 50, 1300);
+  MovePartByAngle(ptHead, Rad(90), 7000, 1900);
+end;
+
+procedure TJumpingMan.MovePart(APart: TPartsOfMan; AAngle: Real;
+  ASize: Real; ADelay: Integer; ATime: Integer);
+var
+  Tmp: TPartP;
+  State, LastState: TState;
+begin
+  Tmp := DeterminePart(APart);
+  LastState := GetLastState(Tmp^);
+  State.Num := ATime div INTERVAL;
+  State.DelayNum := ADelay div INTERVAL;
+  State.DeltaAngle := (AAngle - LastState.Angle) / State.Num;
+  State.DeltaSize := Round(ASize - LastState.Size) div State.Num;
+  State.Angle := AAngle;
+  State.Size := ASize;
+  if Tmp^.Queue.Empty then
+  begin
+    Tmp^.Num := State.Num;
+    Tmp^.DelayNum := State.DelayNum;
+    Tmp^.DeltaAngle := State.DeltaAngle;
+    Tmp^.DeltaSize := State.DeltaSize;
+  end;
+  Tmp^.Queue.PushBack(State);
+end;
+
+procedure TJumpingMan.MovePartByAngle(APart: TPartsOfMan; AAngle: Real; ADelay,
+  ATime: Integer);
+var
+  Tmp: TPartP;
+  LastState: TState;
+begin
+  Tmp := DeterminePart(APart);
+  LastState := GetLastState(Tmp^);
+  MovePart(APart, AAngle, LastState.Size, ADelay, ATime);
+end;
+
+procedure TJumpingMan.MovePartBySize(APart: TPartsOfMan; ASize: Real; ADelay,
+  ATime: Integer);
+var
+  Tmp: TPartP;
+  LastState: TState;
+begin
+  Tmp := DeterminePart(APart);
+  LastState := GetLastState(Tmp^);
+  MovePart(APart, LastState.Angle, ASize, ADelay, ATime);
+end;
+
+procedure TJumpingMan.ReDraw;
+begin
+  FOwner.Invalidate;
+end;
+
+procedure TJumpingMan.SetPosition(const X, Y: Integer);
+begin
+  FLeft := X;
+  FTop := Y;
+  FFull.Angle := X;
+  FFull.Size := Y;
+end;
+
+{ TPart }
+
+constructor TPart.Create(const AAngle: Real; const ASize: Real);
+begin
+  Angle := AAngle;
+  Size := ASize;
+  Num := 0;
+  Queue := TList.Create;
+end;
+
+procedure TPart.UpdateValue;
+var
+  Tmp: TState;
+begin
+  if (DelayNum = 0) and (Num = 0) and (not Queue.Empty) then
+  begin
+    Queue.PopFront;
+    if (not Queue.Empty) then
+    begin
+      Tmp := Queue.Front;
+      DelayNum := Tmp.DelayNum;
+      Num := Tmp.Num;
+      DeltaAngle := Tmp.DeltaAngle;
+      DeltaSize := Tmp.DeltaSize;
+    end;
+  end;
+  if DelayNum > 0 then
+    Dec(DelayNum)
+  else
+    if Num > 0 then
+    begin
+      Angle := Angle + DeltaAngle;
+      Size := Size + DeltaSize;
+      Dec(Num);
+    end;
+end;
+
+{ TList }
+
+constructor TList.Create;
+begin
+  New(FHead);
+  FHead^.Next := Nil;
+  FTail := FHead;
+end;
+
+destructor TList.Destroy;
+begin
+  while FTail <> nil do
+  begin
+    FTail := FHead^.Next;
+    Dispose(FHead);
+    FHead := FTail;
+  end;
+end;
+
+function TList.Empty: Boolean;
+begin
+  Result := FSize = 0;
+end;
+
+function TList.GetBack: TState;
+begin
+  Result := FTail^.Data
+end;
+
+function TList.GetFront: TState;
+begin
+  Result := FHead^.Next^.Data
+end;
+
+procedure TList.PopFront;
+var
+  Tmp: TNodeP;
+begin
+  Tmp := FHead^.Next;
+  if Tmp = FTail then
+  begin
+    FHead^.Next := nil;
+    FTail := FHead;
+  end
+  else
+    FHead^.Next := Tmp^.Next;
+  Dispose(Tmp);
+  Dec(FSize);
+end;
+
+procedure TList.PushBack(const Node: TState);
+var
+  Tmp: TNodeP;
+begin
+  New(Tmp);
+  Tmp^.Data := Node;
+  FTail^.Next := Tmp;
+  FTail := Tmp;
+  FTail^.Next := nil;
+  Inc(FSize);
 end;
 
 initialization
